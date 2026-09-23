@@ -17,5 +17,8 @@
     "localtunnel": "^2.0.2",
     "multer": "^2.4.0",
     "qrcode": "^1.5.4"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   }
 }
