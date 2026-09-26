@@ -12,7 +12,7 @@ if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
 
-// Multer storage configuration
+// Multer storage engine
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, uploadDir),
   filename: (req, file, cb) => {
@@ -34,21 +34,34 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: 500 * 1024 * 1024 } // 500MB per file limit for Render Free Tier
+  limits: { fileSize: 500 * 1024 * 1024 } // 500MB
 });
 
-// Health check endpoint for Render
-app.get('/health', (req, res) => res.status(200).send('OK'));
+// JSON API endpoint to list all available files
+app.get('/api/files', (req, res) => {
+  fs.readdir(uploadDir, (err, files) => {
+    if (err) return res.status(500).json({ error: 'Cannot list files' });
+    const fileData = files.map(file => {
+      const stats = fs.statSync(path.join(uploadDir, file));
+      return {
+        name: file,
+        size: (stats.size / (1024 * 1024)).toFixed(2) + ' MB',
+        date: stats.mtime.toLocaleTimeString()
+      };
+    });
+    res.json(fileData);
+  });
+});
 
-// Upload endpoint
+// Upload Endpoint
 app.post('/upload', upload.array('files'), (req, res) => {
   if (!req.files || req.files.length === 0) {
     return res.status(400).json({ error: 'No files provided' });
   }
-  res.json({ message: 'Upload successful!', count: req.files.length });
+  res.json({ message: 'Success', count: req.files.length });
 });
 
-// Download individual file
+// Single File Download
 app.get('/download/:filename', (req, res) => {
   const filePath = path.join(uploadDir, req.params.filename);
   if (fs.existsSync(filePath)) {
@@ -58,93 +71,149 @@ app.get('/download/:filename', (req, res) => {
   }
 });
 
-// Download all uploads as a ZIP file to your PC
+// Download All Files as ZIP
 app.get('/download-all', (req, res) => {
   const archive = archiver('zip', { zlib: { level: 9 } });
-  res.attachment('all-uploads.zip');
+  res.attachment('shared-files.zip');
   archive.pipe(res);
   archive.directory(uploadDir, false);
   archive.finalize();
 });
 
-// Receiver Dashboard: View all uploaded files
-app.get('/files', (req, res) => {
-  fs.readdir(uploadDir, (err, files) => {
-    const fileListHtml = files && files.length
-      ? files.map(f => `
-          <div style="display:flex; justify-content:space-between; align-items:center; padding:10px; border-bottom:1px solid #334155;">
-            <span style="color:#e2e8f0; word-break:break-all;">${f}</span>
-            <a href="/download/${encodeURIComponent(f)}" style="background:#0284c7; color:#fff; text-decoration:none; padding:6px 12px; border-radius:6px; font-size:13px;">Download</a>
-          </div>
-        `).join('')
-      : '<p style="color:#94a3b8; text-align:center; padding:20px;">No files uploaded yet.</p>';
-
-    res.send(`<!DOCTYPE html>
-    <html lang="en">
-    <head>
-      <meta charset="UTF-8">
-      <meta name="viewport" content="width=device-width, initial-scale=1.0">
-      <title>Received Files</title>
-      <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background:#0f172a; color:#f8fafc; padding:20px; }
-        .card { max-width:600px; margin:auto; background:#1e293b; border-radius:12px; padding:20px; box-shadow:0 10px 25px rgba(0,0,0,0.4); }
-        .btn-all { display:block; text-align:center; background:#10b981; color:#fff; padding:12px; border-radius:8px; text-decoration:none; font-weight:600; margin-bottom:16px; }
-      </style>
-    </head>
-    <body>
-      <div class="card">
-        <h2 style="margin-bottom:16px; text-align:center;">Inbox / Received Files</h2>
-        ${files && files.length ? '<a href="/download-all" class="btn-all">📦 Download All as ZIP</a>' : ''}
-        ${fileListHtml}
-      </div>
-    </body>
-    </html>`);
-  });
-});
-
-// Sender UI: Mobile Upload Page
+// Two-Way Mobile & Desktop Interface
 app.get('/', (req, res) => {
   res.send(`<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-  <title>Send Files</title>
+  <title>Two-Way Quick Drop</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #0f172a; color: #f8fafc; min-height: 100vh; display: flex; flex-direction: column; align-items: center; justify-content: center; padding: 16px; }
-    .card { background: #1e293b; width: 100%; max-width: 480px; border-radius: 16px; padding: 24px; box-shadow: 0 10px 25px rgba(0,0,0,0.5); }
-    h1 { font-size: 1.5rem; margin-bottom: 8px; text-align: center; }
-    p.subtitle { color: #94a3b8; font-size: 0.875rem; text-align: center; margin-bottom: 24px; }
-    .drop-zone { border: 2px dashed #475569; border-radius: 12px; padding: 32px 16px; text-align: center; cursor: pointer; background: #0f172a80; }
-    .btn { background: #0284c7; color: #fff; border: none; padding: 12px 24px; font-size: 1rem; font-weight: 600; border-radius: 8px; width: 100%; cursor: pointer; margin-top: 16px; }
-    .btn:disabled { background: #475569; cursor: not-allowed; }
-    .progress-box { margin-top: 20px; display: none; }
-    .progress-bar-bg { background: #334155; height: 10px; border-radius: 5px; overflow: hidden; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #090d16;
+      color: #f8fafc;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 24px 16px;
+    }
+    .container {
+      width: 100%;
+      max-width: 520px;
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+    .card {
+      background: #172033;
+      border-radius: 16px;
+      padding: 22px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+      border: 1px solid #1e293b;
+    }
+    h2 { font-size: 1.25rem; margin-bottom: 6px; display: flex; align-items: center; gap: 8px; }
+    p.subtitle { color: #94a3b8; font-size: 0.85rem; margin-bottom: 16px; }
+    .drop-zone {
+      border: 2px dashed #334155;
+      border-radius: 12px;
+      padding: 24px 16px;
+      text-align: center;
+      cursor: pointer;
+      background: #0f172a80;
+      transition: all 0.2s ease;
+    }
+    .drop-zone:hover { border-color: #38bdf8; }
+    .btn {
+      background: #0284c7;
+      color: #fff;
+      border: none;
+      padding: 12px;
+      font-size: 0.95rem;
+      font-weight: 600;
+      border-radius: 8px;
+      width: 100%;
+      cursor: pointer;
+      margin-top: 14px;
+    }
+    .btn:disabled { background: #334155; cursor: not-allowed; }
+    .btn-zip {
+      background: #10b981;
+      padding: 8px 14px;
+      font-size: 0.85rem;
+      border-radius: 6px;
+      color: #fff;
+      text-decoration: none;
+      font-weight: 600;
+    }
+    .progress-box { margin-top: 14px; display: none; }
+    .progress-bar-bg { background: #334155; height: 8px; border-radius: 4px; overflow: hidden; }
     .progress-bar { width: 0%; height: 100%; background: #38bdf8; }
-    .status { margin-top: 16px; padding: 12px; border-radius: 8px; font-size: 0.9rem; display: none; text-align: center; }
-    .status.success { background: #064e3b; color: #6ee7b7; }
-    .status.error { background: #7f1d1d; color: #fca5a5; }
-    .file-list { margin-top: 12px; font-size: 0.85rem; color: #cbd5e1; max-height: 100px; overflow-y: auto; }
+    .file-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 10px 0;
+      border-bottom: 1px solid #243049;
+    }
+    .file-item:last-child { border-bottom: none; }
+    .file-meta { font-size: 0.75rem; color: #64748b; margin-top: 2px; }
+    .file-name { font-size: 0.9rem; color: #f1f5f9; word-break: break-all; max-width: 70%; }
+    .btn-dl {
+      background: #0284c7;
+      color: #fff;
+      text-decoration: none;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 0.8rem;
+      font-weight: 500;
+      white-space: nowrap;
+    }
+    .header-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 14px;
+    }
   </style>
 </head>
 <body>
-  <div class="card">
-    <h1>Send Files</h1>
-    <p class="subtitle">Upload photos, videos, or documents directly</p>
-    <div class="drop-zone" id="dropZone">
-      <div style="font-size:36px; margin-bottom:8px;">📁</div>
-      <div>Tap to pick files</div>
-      <input type="file" id="fileInput" multiple style="display:none">
+  <div class="container">
+    <!-- SECTION 1: UPLOAD (SEND FILES) -->
+    <div class="card">
+      <h2>📤 Send Files</h2>
+      <p class="subtitle">Upload files to PC or mobile instantly</p>
+      <div class="drop-zone" id="dropZone">
+        <div style="font-size: 28px; margin-bottom: 6px;">📂</div>
+        <div style="font-size: 0.9rem;">Tap to select or drop files here</div>
+        <input type="file" id="fileInput" multiple style="display:none">
+      </div>
+      <div id="fileList" style="margin-top: 10px; font-size: 0.85rem; color: #94a3b8;"></div>
+      <button class="btn" id="uploadBtn" disabled>Upload</button>
+
+      <div class="progress-box" id="progressBox">
+        <div class="progress-bar-bg"><div class="progress-bar" id="progressBar"></div></div>
+        <div id="progressText" style="margin-top: 4px; font-size: 0.75rem; text-align: right; color: #94a3b8;">0%</div>
+      </div>
     </div>
-    <div class="file-list" id="fileList"></div>
-    <button class="btn" id="uploadBtn" disabled>Upload Files</button>
-    <div class="progress-box" id="progressBox">
-      <div class="progress-bar-bg"><div class="progress-bar" id="progressBar"></div></div>
-      <div id="progressText" style="margin-top:6px; font-size:0.8rem; text-align:right;">0%</div>
+
+    <!-- SECTION 2: DOWNLOAD (RECEIVE FILES) -->
+    <div class="card">
+      <div class="header-row">
+        <div>
+          <h2>📥 Available Files</h2>
+          <p class="subtitle" style="margin-bottom: 0;">Tap to download to your device</p>
+        </div>
+        <a href="/download-all" id="zipBtn" class="btn-zip" style="display:none;">📦 All (.zip)</a>
+      </div>
+      <div id="fileContainer" style="margin-top: 10px;">
+        <div style="color: #64748b; text-align: center; padding: 12px; font-size: 0.85rem;">Loading files...</div>
+      </div>
     </div>
-    <div class="status" id="statusMessage"></div>
   </div>
+
   <script>
     const dropZone = document.getElementById('dropZone');
     const fileInput = document.getElementById('fileInput');
@@ -153,7 +222,9 @@ app.get('/', (req, res) => {
     const progressBox = document.getElementById('progressBox');
     const progressBar = document.getElementById('progressBar');
     const progressText = document.getElementById('progressText');
-    const statusMessage = document.getElementById('statusMessage');
+    const fileContainer = document.getElementById('fileContainer');
+    const zipBtn = document.getElementById('zipBtn');
+
     let selectedFiles = [];
 
     dropZone.onclick = () => fileInput.click();
@@ -163,17 +234,40 @@ app.get('/', (req, res) => {
       fileList.innerHTML = selectedFiles.map(f => '• ' + f.name).join('<br>');
       uploadBtn.disabled = false;
       uploadBtn.innerText = 'Upload ' + selectedFiles.length + ' file(s)';
-      statusMessage.style.display = 'none';
     };
 
+    // Load Available Files List
+    async function loadFiles() {
+      try {
+        const res = await fetch('/api/files');
+        const files = await res.json();
+        if (!files.length) {
+          fileContainer.innerHTML = '<div style="color: #64748b; text-align: center; padding: 12px; font-size: 0.85rem;">No files available yet.</div>';
+          zipBtn.style.display = 'none';
+          return;
+        }
+        zipBtn.style.display = 'inline-block';
+        fileContainer.innerHTML = files.map(f => \`
+          <div class="file-item">
+            <div>
+              <div class="file-name">\${f.name}</div>
+              <div class="file-meta">\${f.size} • \${f.date}</div>
+            </div>
+            <a href="/download/\${encodeURIComponent(f.name)}" class="btn-dl">Download</a>
+          </div>
+        \`).join('');
+      } catch (err) {
+        fileContainer.innerHTML = '<div style="color: #ef4444; font-size: 0.85rem;">Error loading file list.</div>';
+      }
+    }
+
+    // Handle Upload
     uploadBtn.onclick = () => {
       const formData = new FormData();
       for (const file of selectedFiles) formData.append('files', file);
 
       uploadBtn.disabled = true;
       progressBox.style.display = 'block';
-      progressBar.style.width = '0%';
-      progressText.innerText = '0%';
 
       const xhr = new XMLHttpRequest();
       xhr.open('POST', '/upload', true);
@@ -186,28 +280,22 @@ app.get('/', (req, res) => {
       };
       xhr.onload = () => {
         progressBox.style.display = 'none';
-        if (xhr.status === 200) {
-          statusMessage.className = 'status success';
-          statusMessage.innerText = '✅ Files uploaded successfully!';
-          statusMessage.style.display = 'block';
-          fileList.innerHTML = '';
-          selectedFiles = [];
-          uploadBtn.innerText = 'Upload Files';
-        } else {
-          statusMessage.className = 'status error';
-          statusMessage.innerText = 'Upload failed.';
-          statusMessage.style.display = 'block';
-          uploadBtn.disabled = false;
-        }
+        selectedFiles = [];
+        fileList.innerHTML = '';
+        uploadBtn.innerText = 'Upload';
+        loadFiles(); // Refresh file list automatically!
       };
       xhr.send(formData);
     };
+
+    // Auto-refresh file list every 6 seconds
+    loadFiles();
+    setInterval(loadFiles, 6000);
   </script>
 </body>
 </html>`);
 });
 
-// Explicitly bind to 0.0.0.0 and process.env.PORT for Render
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Server listening on 0.0.0.0:${PORT}`);
+  console.log(`Two-way server listening on port ${PORT}`);
 });
