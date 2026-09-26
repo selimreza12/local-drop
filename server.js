@@ -8,11 +8,16 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const uploadDir = path.join(__dirname, 'uploads');
 
+// SET YOUR DESIRED ADMIN PIN HERE:
+const ADMIN_PIN = process.env.ADMIN_PIN || '1234';
+
+app.use(express.json());
+
 if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
 
-// Multer storage engine
+// Multer storage
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, uploadDir),
   filename: (req, file, cb) => {
@@ -34,11 +39,30 @@ const storage = multer.diskStorage({
 
 const upload = multer({
   storage,
-  limits: { fileSize: 500 * 1024 * 1024 } // 500MB
+  limits: { fileSize: 500 * 1024 * 1024 }
 });
 
-// JSON API endpoint to list all available files
-app.get('/api/files', (req, res) => {
+// Helper auth middleware
+function checkAuth(req, res, next) {
+  const pin = req.headers['x-admin-pin'] || req.query.pin;
+  if (pin === ADMIN_PIN) {
+    return next();
+  }
+  return res.status(401).json({ error: 'Unauthorized: Invalid Admin PIN' });
+}
+
+// 1. PUBLIC Upload Endpoint (Anyone can upload, but they cannot see others' files)
+app.post('/upload', upload.array('files'), (req, res) => {
+  if (!req.files || req.files.length === 0) {
+    return res.status(400).json({ error: 'No files provided' });
+  }
+  // Return only the files uploaded in THIS specific request
+  const uploaded = req.files.map(f => f.filename);
+  res.json({ message: 'Success', files: uploaded });
+});
+
+// 2. ADMIN ONLY: Get full file list
+app.get('/api/admin/files', checkAuth, (req, res) => {
   fs.readdir(uploadDir, (err, files) => {
     if (err) return res.status(500).json({ error: 'Cannot list files' });
     const fileData = files.map(file => {
@@ -53,15 +77,28 @@ app.get('/api/files', (req, res) => {
   });
 });
 
-// Upload Endpoint
-app.post('/upload', upload.array('files'), (req, res) => {
-  if (!req.files || req.files.length === 0) {
-    return res.status(400).json({ error: 'No files provided' });
+// 3. ADMIN ONLY: Single File Delete
+app.delete('/api/files/:filename', checkAuth, (req, res) => {
+  const filePath = path.join(uploadDir, req.params.filename);
+  if (fs.existsSync(filePath)) {
+    fs.unlinkSync(filePath);
+    return res.json({ success: true, message: 'File deleted' });
   }
-  res.json({ message: 'Success', count: req.files.length });
+  res.status(404).json({ error: 'File not found' });
 });
 
-// Single File Download
+// 4. ADMIN ONLY: Clear All Files
+app.post('/api/clear-all', checkAuth, (req, res) => {
+  fs.readdir(uploadDir, (err, files) => {
+    if (err) return res.status(500).json({ error: 'Could not read directory' });
+    for (const f of files) {
+      fs.unlinkSync(path.join(uploadDir, f));
+    }
+    res.json({ success: true, message: 'All files cleared' });
+  });
+});
+
+// 5. Download Single File (Direct link)
 app.get('/download/:filename', (req, res) => {
   const filePath = path.join(uploadDir, req.params.filename);
   if (fs.existsSync(filePath)) {
@@ -71,23 +108,23 @@ app.get('/download/:filename', (req, res) => {
   }
 });
 
-// Download All Files as ZIP
-app.get('/download-all', (req, res) => {
+// 6. ADMIN ONLY: Download All as ZIP
+app.get('/download-all', checkAuth, (req, res) => {
   const archive = archiver('zip', { zlib: { level: 9 } });
-  res.attachment('shared-files.zip');
+  res.attachment('all-files.zip');
   archive.pipe(res);
   archive.directory(uploadDir, false);
   archive.finalize();
 });
 
-// Two-Way Mobile & Desktop Interface
+// Web Application UI
 app.get('/', (req, res) => {
   res.send(`<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
-  <title>Two-Way Quick Drop</title>
+  <title>Secure Drop</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
     body {
@@ -98,15 +135,9 @@ app.get('/', (req, res) => {
       display: flex;
       flex-direction: column;
       align-items: center;
-      padding: 24px 16px;
+      padding: 20px 16px;
     }
-    .container {
-      width: 100%;
-      max-width: 520px;
-      display: flex;
-      flex-direction: column;
-      gap: 20px;
-    }
+    .container { width: 100%; max-width: 520px; display: flex; flex-direction: column; gap: 20px; }
     .card {
       background: #172033;
       border-radius: 16px;
@@ -114,18 +145,16 @@ app.get('/', (req, res) => {
       box-shadow: 0 10px 30px rgba(0,0,0,0.6);
       border: 1px solid #1e293b;
     }
-    h2 { font-size: 1.25rem; margin-bottom: 6px; display: flex; align-items: center; gap: 8px; }
+    h2 { font-size: 1.25rem; margin-bottom: 6px; }
     p.subtitle { color: #94a3b8; font-size: 0.85rem; margin-bottom: 16px; }
     .drop-zone {
       border: 2px dashed #334155;
       border-radius: 12px;
-      padding: 24px 16px;
+      padding: 28px 16px;
       text-align: center;
       cursor: pointer;
       background: #0f172a80;
-      transition: all 0.2s ease;
     }
-    .drop-zone:hover { border-color: #38bdf8; }
     .btn {
       background: #0284c7;
       color: #fff;
@@ -139,15 +168,8 @@ app.get('/', (req, res) => {
       margin-top: 14px;
     }
     .btn:disabled { background: #334155; cursor: not-allowed; }
-    .btn-zip {
-      background: #10b981;
-      padding: 8px 14px;
-      font-size: 0.85rem;
-      border-radius: 6px;
-      color: #fff;
-      text-decoration: none;
-      font-weight: 600;
-    }
+    .btn-danger { background: #ef4444 !important; padding: 6px 10px; font-size: 0.8rem; border-radius: 6px; cursor: pointer; border:none; color:white; }
+    .btn-zip { background: #10b981; padding: 6px 12px; font-size: 0.8rem; border-radius: 6px; color: #fff; text-decoration: none; font-weight: 600; }
     .progress-box { margin-top: 14px; display: none; }
     .progress-bar-bg { background: #334155; height: 8px; border-radius: 4px; overflow: hidden; }
     .progress-bar { width: 0%; height: 100%; background: #38bdf8; }
@@ -158,36 +180,35 @@ app.get('/', (req, res) => {
       padding: 10px 0;
       border-bottom: 1px solid #243049;
     }
-    .file-item:last-child { border-bottom: none; }
+    .file-name { font-size: 0.9rem; color: #f1f5f9; word-break: break-all; max-width: 60%; }
     .file-meta { font-size: 0.75rem; color: #64748b; margin-top: 2px; }
-    .file-name { font-size: 0.9rem; color: #f1f5f9; word-break: break-all; max-width: 70%; }
-    .btn-dl {
-      background: #0284c7;
-      color: #fff;
-      text-decoration: none;
-      padding: 6px 12px;
-      border-radius: 6px;
-      font-size: 0.8rem;
-      font-weight: 500;
-      white-space: nowrap;
-    }
-    .header-row {
+    .btn-dl { background: #0284c7; color: #fff; text-decoration: none; padding: 6px 10px; border-radius: 6px; font-size: 0.8rem; margin-right: 6px; }
+    .admin-bar {
       display: flex;
-      justify-content: space-between;
-      align-items: center;
-      margin-bottom: 14px;
+      gap: 8px;
+      margin-top: 10px;
+    }
+    .input-pin {
+      background: #0f172a;
+      border: 1px solid #334155;
+      color: #fff;
+      padding: 8px 12px;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      width: 120px;
+      text-align: center;
     }
   </style>
 </head>
 <body>
   <div class="container">
-    <!-- SECTION 1: UPLOAD (SEND FILES) -->
+    <!-- PUBLIC UPLOAD CARD -->
     <div class="card">
-      <h2>📤 Send Files</h2>
-      <p class="subtitle">Upload files to PC or mobile instantly</p>
+      <h2>📤 Secure Upload</h2>
+      <p class="subtitle">Drop files here. Only you and the PC owner can access them.</p>
       <div class="drop-zone" id="dropZone">
-        <div style="font-size: 28px; margin-bottom: 6px;">📂</div>
-        <div style="font-size: 0.9rem;">Tap to select or drop files here</div>
+        <div style="font-size: 32px; margin-bottom: 6px;">🔒</div>
+        <div style="font-size: 0.9rem;">Tap to select or drop files</div>
         <input type="file" id="fileInput" multiple style="display:none">
       </div>
       <div id="fileList" style="margin-top: 10px; font-size: 0.85rem; color: #94a3b8;"></div>
@@ -197,24 +218,36 @@ app.get('/', (req, res) => {
         <div class="progress-bar-bg"><div class="progress-bar" id="progressBar"></div></div>
         <div id="progressText" style="margin-top: 4px; font-size: 0.75rem; text-align: right; color: #94a3b8;">0%</div>
       </div>
+
+      <!-- Sender Session Confirmation -->
+      <div id="sessionConfirm" style="margin-top:14px; font-size:0.85rem; color:#34d399; display:none;"></div>
     </div>
 
-    <!-- SECTION 2: DOWNLOAD (RECEIVE FILES) -->
-    <div class="card">
-      <div class="header-row">
-        <div>
-          <h2>📥 Available Files</h2>
-          <p class="subtitle" style="margin-bottom: 0;">Tap to download to your device</p>
+    <!-- PC OWNER / ADMIN CONTROLS -->
+    <div class="card" id="adminCard">
+      <div style="display: flex; justify-content: space-between; align-items: center;">
+        <h2>🛡️ PC Admin Storage</h2>
+        <div id="adminActions" style="display:none; gap:6px;">
+          <a id="zipBtn" href="#" class="btn-zip">📦 ZIP</a>
+          <button id="clearAllBtn" class="btn-danger">🧹 Clear All</button>
         </div>
-        <a href="/download-all" id="zipBtn" class="btn-zip" style="display:none;">📦 All (.zip)</a>
       </div>
-      <div id="fileContainer" style="margin-top: 10px;">
-        <div style="color: #64748b; text-align: center; padding: 12px; font-size: 0.85rem;">Loading files...</div>
+      <p class="subtitle">Enter your Admin PIN to manage and delete files.</p>
+
+      <div id="authSection" class="admin-bar">
+        <input type="password" id="pinInput" class="input-pin" placeholder="PIN (default 1234)">
+        <button class="btn" id="unlockBtn" style="margin-top:0; width:auto; padding:8px 16px;">Unlock</button>
+      </div>
+
+      <div id="fileContainer" style="margin-top: 14px; display:none;">
+        <div style="color: #64748b; text-align: center; font-size: 0.85rem;">No files uploaded yet.</div>
       </div>
     </div>
   </div>
 
   <script>
+    let adminPin = localStorage.getItem('drop_admin_pin') || '';
+
     const dropZone = document.getElementById('dropZone');
     const fileInput = document.getElementById('fileInput');
     const uploadBtn = document.getElementById('uploadBtn');
@@ -222,49 +255,30 @@ app.get('/', (req, res) => {
     const progressBox = document.getElementById('progressBox');
     const progressBar = document.getElementById('progressBar');
     const progressText = document.getElementById('progressText');
+    const sessionConfirm = document.getElementById('sessionConfirm');
+
+    const pinInput = document.getElementById('pinInput');
+    const unlockBtn = document.getElementById('unlockBtn');
+    const authSection = document.getElementById('authSection');
+    const adminActions = document.getElementById('adminActions');
     const fileContainer = document.getElementById('fileContainer');
     const zipBtn = document.getElementById('zipBtn');
-
-    let selectedFiles = [];
+    const clearAllBtn = document.getElementById('clearAllBtn');
 
     dropZone.onclick = () => fileInput.click();
     fileInput.onchange = () => {
-      selectedFiles = Array.from(fileInput.files);
-      if (!selectedFiles.length) return;
-      fileList.innerHTML = selectedFiles.map(f => '• ' + f.name).join('<br>');
+      const files = Array.from(fileInput.files);
+      if (!files.length) return;
+      fileList.innerHTML = files.map(f => '• ' + f.name).join('<br>');
       uploadBtn.disabled = false;
-      uploadBtn.innerText = 'Upload ' + selectedFiles.length + ' file(s)';
+      uploadBtn.innerText = 'Upload ' + files.length + ' file(s)';
+      sessionConfirm.style.display = 'none';
     };
 
-    // Load Available Files List
-    async function loadFiles() {
-      try {
-        const res = await fetch('/api/files');
-        const files = await res.json();
-        if (!files.length) {
-          fileContainer.innerHTML = '<div style="color: #64748b; text-align: center; padding: 12px; font-size: 0.85rem;">No files available yet.</div>';
-          zipBtn.style.display = 'none';
-          return;
-        }
-        zipBtn.style.display = 'inline-block';
-        fileContainer.innerHTML = files.map(f => \`
-          <div class="file-item">
-            <div>
-              <div class="file-name">\${f.name}</div>
-              <div class="file-meta">\${f.size} • \${f.date}</div>
-            </div>
-            <a href="/download/\${encodeURIComponent(f.name)}" class="btn-dl">Download</a>
-          </div>
-        \`).join('');
-      } catch (err) {
-        fileContainer.innerHTML = '<div style="color: #ef4444; font-size: 0.85rem;">Error loading file list.</div>';
-      }
-    }
-
-    // Handle Upload
+    // Public Upload
     uploadBtn.onclick = () => {
       const formData = new FormData();
-      for (const file of selectedFiles) formData.append('files', file);
+      for (const file of fileInput.files) formData.append('files', file);
 
       uploadBtn.disabled = true;
       progressBox.style.display = 'block';
@@ -280,22 +294,91 @@ app.get('/', (req, res) => {
       };
       xhr.onload = () => {
         progressBox.style.display = 'none';
-        selectedFiles = [];
+        fileInput.value = '';
         fileList.innerHTML = '';
         uploadBtn.innerText = 'Upload';
-        loadFiles(); // Refresh file list automatically!
+        sessionConfirm.style.display = 'block';
+        sessionConfirm.innerText = '✅ Files safely uploaded to PC!';
+        if (adminPin) loadAdminFiles();
       };
       xhr.send(formData);
     };
 
-    // Auto-refresh file list every 6 seconds
-    loadFiles();
-    setInterval(loadFiles, 6000);
+    // Admin Auth
+    unlockBtn.onclick = () => {
+      adminPin = pinInput.value.trim();
+      localStorage.setItem('drop_admin_pin', adminPin);
+      loadAdminFiles();
+    };
+
+    async function loadAdminFiles() {
+      try {
+        const res = await fetch('/api/admin/files', {
+          headers: { 'x-admin-pin': adminPin }
+        });
+        if (!res.ok) {
+          alert('Incorrect PIN');
+          localStorage.removeItem('drop_admin_pin');
+          adminPin = '';
+          return;
+        }
+
+        const files = await res.json();
+        authSection.style.display = 'none';
+        adminActions.style.display = 'flex';
+        fileContainer.style.display = 'block';
+        zipBtn.href = '/download-all?pin=' + encodeURIComponent(adminPin);
+
+        if (!files.length) {
+          fileContainer.innerHTML = '<div style="color: #64748b; text-align: center; padding: 12px; font-size: 0.85rem;">Storage is empty.</div>';
+          return;
+        }
+
+        fileContainer.innerHTML = files.map(f => \`
+          <div class="file-item">
+            <div>
+              <div class="file-name">\${f.name}</div>
+              <div class="file-meta">\${f.size} • \${f.date}</div>
+            </div>
+            <div style="display:flex; align-items:center;">
+              <a href="/download/\${encodeURIComponent(f.name)}" class="btn-dl">Download</a>
+              <button class="btn-danger" onclick="deleteFile('\${encodeURIComponent(f.name)}')">🗑️</button>
+            </div>
+          </div>
+        \`).join('');
+      } catch (err) {
+        alert('Network error verifying admin access');
+      }
+    }
+
+    window.deleteFile = async (name) => {
+      if (!confirm('Are you sure you want to permanently delete this file?')) return;
+      await fetch('/api/files/' + name, {
+        method: 'DELETE',
+        headers: { 'x-admin-pin': adminPin }
+      });
+      loadAdminFiles();
+    };
+
+    clearAllBtn.onclick = async () => {
+      if (!confirm('Delete ALL files currently stored?')) return;
+      await fetch('/api/clear-all', {
+        method: 'POST',
+        headers: { 'x-admin-pin': adminPin }
+      });
+      loadAdminFiles();
+    };
+
+    // Auto-login if PIN is saved on this browser
+    if (adminPin) {
+      pinInput.value = adminPin;
+      loadAdminFiles();
+    }
   </script>
 </body>
 </html>`);
 });
 
 app.listen(PORT, '0.0.0.0', () => {
-  console.log(`Two-way server listening on port ${PORT}`);
+  console.log(`Secure Drop listening on port ${PORT}`);
 });
