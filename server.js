@@ -308,7 +308,7 @@ app.get('/', (req, res) => {
       <p class="subtitle">Manage storage, delete files, or share files with visitors.</p>
 
       <div id="authSection" style="display:flex; gap:8px;">
-        <input type="password" id="pinInput" class="input-pin" placeholder="PIN (1234)">
+        <input type="password" id="pinInput" class="input-pin" placeholder="ENTER PIN">
         <button class="btn" id="unlockBtn" style="margin-top:0; width:auto; padding:8px 16px;">Unlock</button>
       </div>
 
