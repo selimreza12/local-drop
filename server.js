@@ -17,6 +17,19 @@ if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
 
+// Inline SVG Favicon
+const faviconSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
+  <rect width="100" height="100" rx="22" fill="#0284c7"/>
+  <path d="M50 22 L72 46 H58 V74 H42 V46 H28 Z" fill="#ffffff"/>
+  <rect x="26" y="80" width="48" height="6" rx="3" fill="#38bdf8"/>
+</svg>`;
+
+// Favicon route
+app.get('/favicon.ico', (req, res) => {
+  res.setHeader('Content-Type', 'image/svg+xml');
+  res.send(faviconSvg);
+});
+
 // Helpers to track which files are marked "Shared to Senders"
 function getSharedFiles() {
   try {
@@ -31,7 +44,7 @@ function saveSharedFiles(list) {
   fs.writeFileSync(sharedMetaFile, JSON.stringify(list, null, 2));
 }
 
-// Multer setup
+// Multer storage
 const storage = multer.diskStorage({
   destination: (req, file, cb) => cb(null, uploadDir),
   filename: (req, file, cb) => {
@@ -170,6 +183,7 @@ app.get('/', (req, res) => {
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="/favicon.ico">
   <title>Drop & Share</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -325,22 +339,22 @@ app.get('/', (req, res) => {
     const zipBtn = document.getElementById('zipBtn');
     const clearAllBtn = document.getElementById('clearAllBtn');
 
-    // Load Public Shared Files (For anyone scanning)
+    // Load Public Shared Files
     async function loadPublicFiles() {
       try {
         const res = await fetch('/api/public/shared');
         const files = await res.json();
         if (files.length > 0) {
           publicDownloadsCard.style.display = 'block';
-          publicList.innerHTML = files.map(f => \`
+          publicList.innerHTML = files.map(f => `
             <div class="file-item">
               <div>
-                <div class="file-name">\${f.name}</div>
-                <div class="file-meta">\${f.size}</div>
+                <div class="file-name">${f.name}</div>
+                <div class="file-meta">${f.size}</div>
               </div>
-              <a href="/download/\${encodeURIComponent(f.name)}" class="btn-dl">Download</a>
+              <a href="/download/${encodeURIComponent(f.name)}" class="btn-dl">Download</a>
             </div>
-          \`).join('');
+          `).join('');
         } else {
           publicDownloadsCard.style.display = 'none';
         }
@@ -417,20 +431,20 @@ app.get('/', (req, res) => {
           return;
         }
 
-        adminContainer.innerHTML = files.map(f => \`
+        adminContainer.innerHTML = files.map(f => `
           <div class="file-item">
             <div>
-              <div class="file-name">\${f.name}</div>
-              <div class="file-meta">\${f.size} • \${f.date}</div>
+              <div class="file-name">${f.name}</div>
+              <div class="file-meta">${f.size} • ${f.date}</div>
             </div>
             <div style="display:flex; align-items:center;">
-              <button class="btn-toggle \${f.isShared ? 'active' : ''}" onclick="toggleShare('\${encodeURIComponent(f.name)}')">
-                \${f.isShared ? '📢 Shared' : '🔒 Private'}
+              <button class="btn-toggle ${f.isShared ? 'active' : ''}" onclick="toggleShare('${encodeURIComponent(f.name)}')">
+                ${f.isShared ? '📢 Shared' : '🔒 Private'}
               </button>
-              <button class="btn-danger" onclick="deleteFile('\${encodeURIComponent(f.name)}')">🗑️</button>
+              <button class="btn-danger" onclick="deleteFile('${encodeURIComponent(f.name)}')">🗑️</button>
             </div>
           </div>
-        \`).join('');
+        `).join('');
       } catch (e) {}
     }
 
