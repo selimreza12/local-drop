@@ -9,7 +9,8 @@ const PORT = process.env.PORT || 3000;
 const uploadDir = path.join(__dirname, 'uploads');
 const sharedMetaFile = path.join(__dirname, 'shared.json');
 
-const ADMIN_PIN = process.env.ADMIN_PIN || '1234';
+// Your secret PIN (change here or set ADMIN_PIN in Render Environment Variables)
+const ADMIN_PIN = process.env.ADMIN_PIN || '8492';
 
 app.use(express.json());
 
@@ -17,20 +18,18 @@ if (!fs.existsSync(uploadDir)) {
   fs.mkdirSync(uploadDir, { recursive: true });
 }
 
-// Inline SVG Favicon
+// Favicon
 const faviconSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100">
   <rect width="100" height="100" rx="22" fill="#0284c7"/>
   <path d="M50 22 L72 46 H58 V74 H42 V46 H28 Z" fill="#ffffff"/>
   <rect x="26" y="80" width="48" height="6" rx="3" fill="#38bdf8"/>
 </svg>`;
 
-// Favicon route
 app.get('/favicon.ico', (req, res) => {
   res.setHeader('Content-Type', 'image/svg+xml');
   res.send(faviconSvg);
 });
 
-// Helpers to track which files are marked "Shared to Senders"
 function getSharedFiles() {
   try {
     if (fs.existsSync(sharedMetaFile)) {
@@ -71,11 +70,11 @@ const upload = multer({
 
 function checkAuth(req, res, next) {
   const pin = req.headers['x-admin-pin'] || req.query.pin;
-  if (pin === ADMIN_PIN) return next();
-  return res.status(401).json({ error: 'Unauthorized: Invalid Admin PIN' });
+  if (pin && pin === ADMIN_PIN) return next();
+  return res.status(401).json({ error: 'Unauthorized' });
 }
 
-// 1. PUBLIC: Upload to PC (Always private)
+// 1. PUBLIC: Upload
 app.post('/upload', upload.array('files'), (req, res) => {
   if (!req.files || req.files.length === 0) {
     return res.status(400).json({ error: 'No files provided' });
@@ -83,7 +82,7 @@ app.post('/upload', upload.array('files'), (req, res) => {
   res.json({ message: 'Success' });
 });
 
-// 2. PUBLIC: Get ONLY files marked by PC owner as "Shared"
+// 2. PUBLIC: Get files explicitly marked as shared by admin
 app.get('/api/public/shared', (req, res) => {
   const sharedList = getSharedFiles();
   const validFiles = [];
@@ -101,7 +100,7 @@ app.get('/api/public/shared', (req, res) => {
   res.json(validFiles);
 });
 
-// 3. ADMIN: Get ALL files + their share status
+// 3. ADMIN: List all files
 app.get('/api/admin/files', checkAuth, (req, res) => {
   fs.readdir(uploadDir, (err, files) => {
     if (err) return res.status(500).json({ error: 'Cannot read files' });
@@ -119,7 +118,7 @@ app.get('/api/admin/files', checkAuth, (req, res) => {
   });
 });
 
-// 4. ADMIN: Toggle "Share to Senders"
+// 4. ADMIN: Toggle file sharing
 app.post('/api/admin/toggle-share', checkAuth, (req, res) => {
   const { filename } = req.body;
   if (!filename) return res.status(400).json({ error: 'Missing filename' });
@@ -134,7 +133,7 @@ app.post('/api/admin/toggle-share', checkAuth, (req, res) => {
   res.json({ success: true, sharedList });
 });
 
-// 5. ADMIN: Delete a file
+// 5. ADMIN: Delete a single file
 app.delete('/api/files/:filename', checkAuth, (req, res) => {
   const filename = req.params.filename;
   const filePath = path.join(uploadDir, filename);
@@ -147,7 +146,7 @@ app.delete('/api/files/:filename', checkAuth, (req, res) => {
   res.status(404).json({ error: 'File not found' });
 });
 
-// 6. ADMIN: Clear all
+// 6. ADMIN: Clear all files
 app.post('/api/clear-all', checkAuth, (req, res) => {
   fs.readdir(uploadDir, (err, files) => {
     if (err) return res.status(500).json({ error: 'Error clearing' });
@@ -157,14 +156,21 @@ app.post('/api/clear-all', checkAuth, (req, res) => {
   });
 });
 
-// 7. Download file
+// 7. Download route
 app.get('/download/:filename', (req, res) => {
-  const filePath = path.join(uploadDir, req.params.filename);
-  if (fs.existsSync(filePath)) {
-    res.download(filePath);
-  } else {
-    res.status(404).send('File not found');
+  const filename = req.params.filename;
+  const sharedList = getSharedFiles();
+  const pin = req.query.pin;
+
+  // Allowed if the file is explicitly public OR if caller has the admin PIN
+  if (sharedList.includes(filename) || pin === ADMIN_PIN) {
+    const filePath = path.join(uploadDir, filename);
+    if (fs.existsSync(filePath)) {
+      return res.download(filePath);
+    }
+    return res.status(404).send('File not found');
   }
+  return res.status(403).send('Access denied');
 });
 
 // 8. ADMIN: Download all as ZIP
@@ -176,7 +182,10 @@ app.get('/download-all', checkAuth, (req, res) => {
   archive.finalize();
 });
 
-// User Interface
+// ==========================================
+// 1. PUBLIC ROUTE ('/'): Senders Only
+// (No admin tools, no PIN inputs, pure privacy)
+// ==========================================
 app.get('/', (req, res) => {
   res.send(`<!DOCTYPE html>
 <html lang="en">
@@ -195,22 +204,22 @@ app.get('/', (req, res) => {
       display: flex;
       flex-direction: column;
       align-items: center;
-      padding: 20px 16px;
+      padding: 24px 16px;
     }
-    .container { width: 100%; max-width: 520px; display: flex; flex-direction: column; gap: 20px; }
+    .container { width: 100%; max-width: 480px; display: flex; flex-direction: column; gap: 20px; }
     .card {
       background: #172033;
       border-radius: 16px;
-      padding: 22px;
+      padding: 24px;
       box-shadow: 0 10px 30px rgba(0,0,0,0.6);
       border: 1px solid #1e293b;
     }
-    h2 { font-size: 1.2rem; margin-bottom: 6px; }
+    h2 { font-size: 1.25rem; margin-bottom: 6px; }
     p.subtitle { color: #94a3b8; font-size: 0.85rem; margin-bottom: 16px; }
     .drop-zone {
       border: 2px dashed #334155;
       border-radius: 12px;
-      padding: 24px 16px;
+      padding: 32px 16px;
       text-align: center;
       cursor: pointer;
       background: #0f172a80;
@@ -228,21 +237,6 @@ app.get('/', (req, res) => {
       margin-top: 14px;
     }
     .btn:disabled { background: #334155; cursor: not-allowed; }
-    .btn-toggle {
-      background: #334155;
-      color: #cbd5e1;
-      border: none;
-      padding: 5px 8px;
-      border-radius: 6px;
-      font-size: 0.75rem;
-      cursor: pointer;
-      margin-right: 6px;
-    }
-    .btn-toggle.active {
-      background: #10b981;
-      color: #fff;
-    }
-    .btn-danger { background: #ef4444; padding: 5px 8px; font-size: 0.75rem; border-radius: 6px; cursor: pointer; border:none; color:white; }
     .btn-dl { background: #0284c7; color: #fff; text-decoration: none; padding: 6px 12px; border-radius: 6px; font-size: 0.8rem; }
     .progress-box { margin-top: 14px; display: none; }
     .progress-bar-bg { background: #334155; height: 8px; border-radius: 4px; overflow: hidden; }
@@ -254,29 +248,18 @@ app.get('/', (req, res) => {
       padding: 10px 0;
       border-bottom: 1px solid #243049;
     }
-    .file-name { font-size: 0.9rem; color: #f1f5f9; word-break: break-all; max-width: 55%; }
+    .file-name { font-size: 0.9rem; color: #f1f5f9; word-break: break-all; max-width: 65%; }
     .file-meta { font-size: 0.75rem; color: #64748b; margin-top: 2px; }
-    .input-pin {
-      background: #0f172a;
-      border: 1px solid #334155;
-      color: #fff;
-      padding: 8px 12px;
-      border-radius: 6px;
-      font-size: 0.9rem;
-      width: 120px;
-      text-align: center;
-    }
   </style>
 </head>
 <body>
   <div class="container">
-    <!-- 1. SENDER UPLOAD -->
     <div class="card">
       <h2>📤 Send Files to PC</h2>
-      <p class="subtitle">Uploaded files are completely private and seen only by the PC.</p>
+      <p class="subtitle">Uploads are private and accessible only by the PC owner.</p>
       <div class="drop-zone" id="dropZone">
-        <div style="font-size: 30px; margin-bottom: 6px;">🔒</div>
-        <div style="font-size: 0.9rem;">Tap to select files</div>
+        <div style="font-size: 32px; margin-bottom: 8px;">🔒</div>
+        <div style="font-size: 0.95rem;">Tap to select files</div>
         <input type="file" id="fileInput" multiple style="display:none">
       </div>
       <div id="fileList" style="margin-top: 10px; font-size: 0.85rem; color: #94a3b8;"></div>
@@ -289,36 +272,15 @@ app.get('/', (req, res) => {
       <div id="sessionConfirm" style="margin-top:14px; font-size:0.85rem; color:#34d399; display:none;"></div>
     </div>
 
-    <!-- 2. PUBLIC DOWNLOADS (Shared by PC Owner) -->
+    <!-- Only shows if PC owner chose to share public files -->
     <div class="card" id="publicDownloadsCard" style="display:none;">
       <h2>📥 Download from PC</h2>
-      <p class="subtitle">Files the PC owner has shared with you:</p>
+      <p class="subtitle">Files shared with visitors:</p>
       <div id="publicList"></div>
-    </div>
-
-    <!-- 3. PC OWNER / ADMIN CONTROLS -->
-    <div class="card">
-      <div style="display: flex; justify-content: space-between; align-items: center;">
-        <h2>🛡️ PC Admin Panel</h2>
-        <div id="adminActions" style="display:none; gap:6px;">
-          <a id="zipBtn" href="#" style="background:#10b981; color:#fff; text-decoration:none; padding:5px 10px; font-size:0.75rem; border-radius:6px;">📦 ZIP</a>
-          <button id="clearAllBtn" class="btn-danger">🧹 Clear</button>
-        </div>
-      </div>
-      <p class="subtitle">Manage storage, delete files, or share files with visitors.</p>
-
-      <div id="authSection" style="display:flex; gap:8px;">
-        <input type="password" id="pinInput" class="input-pin" placeholder="ENTER PIN">
-        <button class="btn" id="unlockBtn" style="margin-top:0; width:auto; padding:8px 16px;">Unlock</button>
-      </div>
-
-      <div id="adminContainer" style="margin-top: 14px; display:none;"></div>
     </div>
   </div>
 
   <script>
-    let adminPin = localStorage.getItem('drop_admin_pin') || '';
-
     const dropZone = document.getElementById('dropZone');
     const fileInput = document.getElementById('fileInput');
     const uploadBtn = document.getElementById('uploadBtn');
@@ -327,34 +289,24 @@ app.get('/', (req, res) => {
     const progressBar = document.getElementById('progressBar');
     const progressText = document.getElementById('progressText');
     const sessionConfirm = document.getElementById('sessionConfirm');
-
     const publicDownloadsCard = document.getElementById('publicDownloadsCard');
     const publicList = document.getElementById('publicList');
 
-    const pinInput = document.getElementById('pinInput');
-    const unlockBtn = document.getElementById('unlockBtn');
-    const authSection = document.getElementById('authSection');
-    const adminActions = document.getElementById('adminActions');
-    const adminContainer = document.getElementById('adminContainer');
-    const zipBtn = document.getElementById('zipBtn');
-    const clearAllBtn = document.getElementById('clearAllBtn');
-
-    // Load Public Shared Files
     async function loadPublicFiles() {
       try {
         const res = await fetch('/api/public/shared');
         const files = await res.json();
         if (files.length > 0) {
           publicDownloadsCard.style.display = 'block';
-          publicList.innerHTML = files.map(f => `
+          publicList.innerHTML = files.map(f => \`
             <div class="file-item">
               <div>
-                <div class="file-name">${f.name}</div>
-                <div class="file-meta">${f.size}</div>
+                <div class="file-name">\${f.name}</div>
+                <div class="file-meta">\${f.size}</div>
               </div>
-              <a href="/download/${encodeURIComponent(f.name)}" class="btn-dl">Download</a>
+              <a href="/download/\${encodeURIComponent(f.name)}" class="btn-dl">Download</a>
             </div>
-          `).join('');
+          \`).join('');
         } else {
           publicDownloadsCard.style.display = 'none';
         }
@@ -362,7 +314,6 @@ app.get('/', (req, res) => {
     }
     loadPublicFiles();
 
-    // Upload Files
     dropZone.onclick = () => fileInput.click();
     fileInput.onchange = () => {
       const files = Array.from(fileInput.files);
@@ -396,12 +347,118 @@ app.get('/', (req, res) => {
         uploadBtn.innerText = 'Upload';
         sessionConfirm.style.display = 'block';
         sessionConfirm.innerText = '✅ Files safely uploaded to PC!';
-        if (adminPin) loadAdminFiles();
       };
       xhr.send(formData);
     };
+  </script>
+</body>
+</html>`);
+});
 
-    // Admin Auth
+// ==========================================
+// 2. PRIVATE ROUTE ('/admin'): For You Only
+// ==========================================
+app.get('/admin', (req, res) => {
+  res.send(`<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" type="image/svg+xml" href="/favicon.ico">
+  <title>Admin Storage Panel</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #090d16;
+      color: #f8fafc;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 24px 16px;
+    }
+    .card {
+      background: #172033;
+      width: 100%;
+      max-width: 580px;
+      border-radius: 16px;
+      padding: 24px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.6);
+      border: 1px solid #1e293b;
+    }
+    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+    .input-pin {
+      background: #0f172a;
+      border: 1px solid #334155;
+      color: #fff;
+      padding: 10px 14px;
+      border-radius: 8px;
+      font-size: 1rem;
+      letter-spacing: 2px;
+      width: 140px;
+    }
+    .btn {
+      background: #0284c7;
+      color: #fff;
+      border: none;
+      padding: 10px 18px;
+      border-radius: 8px;
+      cursor: pointer;
+      font-weight: 600;
+    }
+    .btn-toggle {
+      background: #334155;
+      color: #cbd5e1;
+      border: none;
+      padding: 6px 10px;
+      border-radius: 6px;
+      font-size: 0.75rem;
+      cursor: pointer;
+      margin-right: 6px;
+    }
+    .btn-toggle.active { background: #10b981; color: #fff; }
+    .btn-danger { background: #ef4444; border:none; color:#fff; padding:6px 10px; border-radius:6px; cursor:pointer; }
+    .file-item {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      padding: 12px 0;
+      border-bottom: 1px solid #243049;
+    }
+    .file-name { font-size: 0.9rem; color: #f1f5f9; word-break: break-all; max-width: 50%; }
+    .file-meta { font-size: 0.75rem; color: #64748b; margin-top: 2px; }
+  </style>
+</head>
+<body>
+  <div class="card">
+    <div class="header">
+      <h2>🛡️ PC Admin Panel</h2>
+      <div id="adminActions" style="display:none; gap:6px;">
+        <a id="zipBtn" href="#" style="background:#10b981; color:#fff; text-decoration:none; padding:6px 12px; font-size:0.8rem; border-radius:6px; font-weight:600;">📦 Download ZIP</a>
+        <button id="clearAllBtn" class="btn-danger" style="font-size:0.8rem;">🧹 Clear All</button>
+      </div>
+    </div>
+    <p style="color: #94a3b8; font-size: 0.85rem; margin-bottom: 16px;">Restricted access. Authenticate to manage files.</p>
+
+    <div id="authSection" style="display:flex; gap:10px;">
+      <input type="password" id="pinInput" class="input-pin" placeholder="Enter PIN">
+      <button class="btn" id="unlockBtn">Unlock</button>
+    </div>
+
+    <div id="adminContainer" style="margin-top: 18px; display:none;"></div>
+  </div>
+
+  <script>
+    let adminPin = localStorage.getItem('drop_admin_pin') || '';
+    const pinInput = document.getElementById('pinInput');
+    const unlockBtn = document.getElementById('unlockBtn');
+    const authSection = document.getElementById('authSection');
+    const adminActions = document.getElementById('adminActions');
+    const adminContainer = document.getElementById('adminContainer');
+    const zipBtn = document.getElementById('zipBtn');
+    const clearAllBtn = document.getElementById('clearAllBtn');
+
     unlockBtn.onclick = () => {
       adminPin = pinInput.value.trim();
       localStorage.setItem('drop_admin_pin', adminPin);
@@ -414,7 +471,7 @@ app.get('/', (req, res) => {
           headers: { 'x-admin-pin': adminPin }
         });
         if (!res.ok) {
-          alert('Incorrect PIN');
+          alert('Invalid PIN');
           localStorage.removeItem('drop_admin_pin');
           adminPin = '';
           return;
@@ -427,25 +484,27 @@ app.get('/', (req, res) => {
         zipBtn.href = '/download-all?pin=' + encodeURIComponent(adminPin);
 
         if (!files.length) {
-          adminContainer.innerHTML = '<div style="color:#64748b; text-align:center; padding:12px; font-size:0.85rem;">Storage is empty.</div>';
+          adminContainer.innerHTML = '<div style="color:#64748b; text-align:center; padding:16px;">Storage is empty.</div>';
           return;
         }
 
-        adminContainer.innerHTML = files.map(f => `
+        adminContainer.innerHTML = files.map(f => \`
           <div class="file-item">
             <div>
-              <div class="file-name">${f.name}</div>
-              <div class="file-meta">${f.size} • ${f.date}</div>
+              <div class="file-name">\${f.name}</div>
+              <div class="file-meta">\${f.size} • \${f.date}</div>
             </div>
             <div style="display:flex; align-items:center;">
-              <button class="btn-toggle ${f.isShared ? 'active' : ''}" onclick="toggleShare('${encodeURIComponent(f.name)}')">
-                ${f.isShared ? '📢 Shared' : '🔒 Private'}
+              <button class="btn-toggle \${f.isShared ? 'active' : ''}" onclick="toggleShare('\${encodeURIComponent(f.name)}')">
+                \${f.isShared ? '📢 Shared' : '🔒 Private'}
               </button>
-              <button class="btn-danger" onclick="deleteFile('${encodeURIComponent(f.name)}')">🗑️</button>
+              <button class="btn-danger" onclick="deleteFile('\${encodeURIComponent(f.name)}')">🗑️</button>
             </div>
           </div>
-        `).join('');
-      } catch (e) {}
+        \`).join('');
+      } catch (e) {
+        alert('Network error');
+      }
     }
 
     window.toggleShare = async (name) => {
@@ -455,7 +514,6 @@ app.get('/', (req, res) => {
         body: JSON.stringify({ filename: decodeURIComponent(name) })
       });
       loadAdminFiles();
-      loadPublicFiles();
     };
 
     window.deleteFile = async (name) => {
@@ -465,21 +523,18 @@ app.get('/', (req, res) => {
         headers: { 'x-admin-pin': adminPin }
       });
       loadAdminFiles();
-      loadPublicFiles();
     };
 
     clearAllBtn.onclick = async () => {
-      if (!confirm('Delete all files?')) return;
+      if (!confirm('Permanently delete ALL files?')) return;
       await fetch('/api/clear-all', {
         method: 'POST',
         headers: { 'x-admin-pin': adminPin }
       });
       loadAdminFiles();
-      loadPublicFiles();
     };
 
     if (adminPin) {
-      pinInput.value = adminPin;
       loadAdminFiles();
     }
   </script>
